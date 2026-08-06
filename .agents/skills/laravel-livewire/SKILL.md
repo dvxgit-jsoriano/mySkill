@@ -86,10 +86,10 @@ resources/views/livewire/component/
 ```
 
 #### 3. Layouts
-Create and organize layouts corresponding to specific modules:
-- `layouts.module` (Base layout)
-- `layouts.module.header` (Header component)
-- `layouts.module.sidebar` (Sidebar component)
+Always create Blade layouts directly in `resources/views/layouts` instead of `resources/views/components/layouts`.
+- Store layout files directly in `resources/views/layouts/` (e.g., `resources/views/layouts/super-admin.blade.php`, `resources/views/layouts/app.blade.php`).
+- Reference layout views in Livewire page components using `#[Layout('layouts.super-admin')]`.
+
 
 ### Component Structure Rules
 - **No Inline Logic:** Do not write PHP logic or `<script>` tags inside `index.blade.php`. Keep logic inside `index.php`. Keep client-side interactivity to Alpine (see section 4) inline in the Blade file, or in `index.js` only for the rare cases vanilla JS is unavoidable.
