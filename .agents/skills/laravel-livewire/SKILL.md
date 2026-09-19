@@ -1,13 +1,13 @@
 ---
 name: laravel-livewire
-description: Guidelines and instructions for Laravel development using Livewire 4 Multi-File Components (MFC) and Tailwind CSS. Use whenever the user asks to build, scaffold, or edit any Laravel page, component, form, dashboard, or module, organize app structure into modules, style pages, add interactivity to a Blade view, define routes, or when a task might need a new composer/npm package. Enforces MFC (not the SFC default) with pages/component folder structure split by module, `Route::livewire()` as the default routing pattern for Livewire pages, mobile-first Tailwind styling, AlpineJS limited to simple UI interactivity only (logic-heavy behavior goes in Livewire), and a package-minimization policy requiring the user's confirmation before adding any package or starting non-trivial implementation work.
+description: Guidelines and instructions for Laravel development using Livewire 4 Multi-File Components (MFC) and Tailwind CSS. Use whenever the user asks to build, scaffold, or edit any Laravel page, component, form, dashboard, or module, organize app structure into modules, style pages, add interactivity to a Blade view, define routes, implement infinite scroll or load-more functionality using `@island` and `append`, or when a task might need a new composer/npm package. Enforces MFC (not the SFC default) with pages/component folder structure split by module, `Route::livewire()` as the default routing pattern for Livewire pages, `@island` with `wire:island.append` for infinite scroll and load-more feeds, mobile-first Tailwind styling, AlpineJS limited to simple UI interactivity only (logic-heavy behavior goes in Livewire), and a package-minimization policy requiring the user's confirmation before adding any package or starting non-trivial implementation work.
 ---
 
 # Laravel Livewire 4 Multi-File Component (MFC) & Tailwind CSS Guidelines
 
 This skill guides the implementation of features using **Laravel** (latest stable version), **Livewire 4**, **Tailwind CSS**, and **AlpineJS**, with a strict focus on using Multi-File Components (MFCs), mobile-first styling, minimal client-side scripting, and a package-minimization policy.
 
-Apply these rules by default on every relevant task; don't ask permission to follow them, just follow them — except for the package/planning confirmation step in section 5, which always requires an explicit go-ahead first.
+Apply these rules by default on every relevant task; don't ask permission to follow them, just follow them — except for the package/planning confirmation step in section 7, which always requires an explicit go-ahead first.
 
 ## Stack Summary
 
@@ -16,6 +16,7 @@ Apply these rules by default on every relevant task; don't ask permission to fol
 | Backend | PHP + Laravel (always latest stable version — check `composer.json` if unsure) |
 | Components | Livewire **4**, Multi-File Components (MFC) only |
 | Routing | `Route::livewire($uri, Component::class)` for all Livewire page routes |
+| Infinite Scroll / Feeds | Livewire 4 `@island` with `wire:island.append` and `wire:intersect` / load more |
 | Styling | TailwindCSS, utility-first and **mobile-first** |
 | Client interactivity | AlpineJS — simple UI only (`x-show`, `x-if`, `@click`, toggles/tabs/modals). Logic-heavy behavior → Livewire |
 | Vanilla JS | Avoid — use Livewire/Alpine instead |
@@ -92,7 +93,7 @@ Always create Blade layouts directly in `resources/views/layouts` instead of `re
 
 
 ### Component Structure Rules
-- **No Inline Logic:** Do not write PHP logic or `<script>` tags inside `index.blade.php`. Keep logic inside `index.php`. Keep client-side interactivity to Alpine (see section 4) inline in the Blade file, or in `index.js` only for the rare cases vanilla JS is unavoidable.
+- **No Inline Logic:** Do not write PHP logic or `<script>` tags inside `index.blade.php`. Keep logic inside `index.php`. Keep client-side interactivity to Alpine (see section 6) inline in the Blade file, or in `index.js` only for the rare cases vanilla JS is unavoidable.
 - **Blade File Cleanliness:** Break down large pages or complex sections into smaller child Livewire components or Blade sub-views (use `@include`; do not use `<x-component>`).
 
 ---
@@ -114,10 +115,179 @@ Always write modern Livewire 4 code. Avoid obsolete Livewire 2/3 syntaxes.
   @endforeach
   ```
 - **Lazy Loading:** For performance-heavy components, leverage Livewire 4's lazy loading options by passing `#[Lazy]` or returning `lazy` views.
+- **Islands (`@island`) & Appending:** Isolate regions of a component for independent server-side updates without re-rendering the entire component. Always pair `@island(name: '...')` with `wire:island.append` for infinite scroll feeds and "load more" buttons (see section 3).
 
 ---
 
-## 3. Routes — Use `Route::livewire()` for Livewire Pages
+## 3. Infinite Scroll & "Load More" Patterns — Livewire 4 Islands (`@island` & `append`)
+
+Whenever the user requests an **infinite scroll** or **"load more"** functionality, **always use Livewire 4 Islands (`@island`) and `wire:island.append`**. Do not implement full-component re-renders, legacy pagination morphing, or manual JavaScript pagination hacks.
+
+### Why Islands for Feeds?
+In default Livewire re-renders, Livewire morphs and replaces the entire list DOM. With `@island(name: '...')` combined with `wire:island.append`:
+1. Livewire queries and renders **only** the target island, bypassing the rest of the component.
+2. The browser **appends** newly received HTML elements to the existing island DOM without discarding or re-morphing existing items.
+3. Network payload remains lightweight and scrolling remains fast and flicker-free.
+
+### Mandatory Rules for Infinite Scroll & Load More
+
+1. **Wrap the Target Feed in a Named Island:**
+   Wrap the iterated list in `@island(name: 'feed-name')`. Every repeated child item **must** have a unique `wire:key`.
+2. **Apply `wire:island.append` to the Trigger:**
+   - **Load More (Button):** Use `<button type="button" wire:click="loadMore" wire:island.append="feed-name">Load more</button>`.
+   - **Infinite Scroll (Automatic scroll trigger):** Place a trigger element at the bottom of the feed with `<div wire:intersect="loadMore" wire:island.append="feed-name">...</div>`.
+3. **Query ONLY the Current Page in PHP (Never Return Cumulative Items):**
+   - Store the current page in a public property (e.g., `public int $page = 1;`).
+   - Increment `$this->page++` inside the `loadMore()` action method.
+   - When querying items (e.g. in a `#[Computed]` property), fetch **strictly the slice for `$this->page`** using `->forPage($this->page, $this->perPage)->get()`.
+   - ⚠️ **CRITICAL WARNING:** Do **not** query cumulative items (e.g., `take($this->page * $this->perPage)`). Because `wire:island.append` appends the rendered HTML to the existing DOM, returning previously rendered items will duplicate them on the screen!
+4. **Synchronize Controls & Sentinel with `$this->renderIsland()`:**
+   - Islands are isolated by design: actions targeting an island will **not** re-evaluate conditional markup outside that island (such as `@if ($this->hasMorePages)` wrapping a "Load more" button or loading spinner).
+   - Place controls/sentinels inside their own named island (e.g., `@island(name: 'feed-controls')`).
+   - Inside `loadMore()`, call `$this->renderIsland('feed-controls')` so the control island re-renders and hides the trigger when no more pages exist.
+
+### Implementation Blueprint (MFC)
+
+#### `index.php` (Class File)
+```php
+<?php
+
+namespace App\Livewire\Pages\Articles\Index;
+
+use App\Models\Article;
+use Illuminate\Database\Eloquent\Collection;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Layout;
+use Livewire\Component;
+
+#[Layout('layouts.app')]
+class Index extends Component
+{
+    public int $page = 1;
+    public int $perPage = 10;
+
+    public function loadMore(): void
+    {
+        $this->page++;
+
+        // Re-render the controls island so the @if condition updates to hide trigger if finished
+        $this->renderIsland('article-controls');
+    }
+
+    #[Computed]
+    public function articles(): Collection
+    {
+        // Query ONLY the current page slice so append does not produce duplicates
+        return Article::query()
+            ->latest()
+            ->forPage($this->page, $this->perPage)
+            ->get();
+    }
+
+    #[Computed]
+    public function hasMorePages(): bool
+    {
+        return ($this->page * $this->perPage) < Article::count();
+    }
+}
+```
+
+#### `index.blade.php` (Template File — Mobile-First)
+
+##### Pattern A: "Load More" Button
+```html
+<div class="p-4 md:p-6 space-y-6 max-w-4xl mx-auto">
+    {{-- Feed List Island (Appends new items on loadMore) --}}
+    <div class="flex flex-col gap-3">
+        @island(name: 'article-feed')
+            @foreach ($this->articles as $article)
+                <article
+                    wire:key="article-{{ $article->id }}"
+                    class="p-4 bg-white dark:bg-secondary-900 rounded-2xl border border-secondary-100 dark:border-secondary-800 shadow-sm transition hover:shadow-md md:p-6"
+                >
+                    <h3 class="text-lg font-semibold text-secondary-900 dark:text-white">
+                        {{ $article->title }}
+                    </h3>
+                    <p class="mt-2 text-sm text-secondary-600 dark:text-secondary-400">
+                        {{ $article->excerpt }}
+                    </p>
+                </article>
+            @endforeach
+        @endisland
+    </div>
+
+    {{-- Controls Island (Targeted by $this->renderIsland('article-controls')) --}}
+    @island(name: 'article-controls')
+        @if ($this->hasMorePages)
+            <div class="flex justify-center pt-2">
+                <button
+                    type="button"
+                    wire:click="loadMore"
+                    wire:island.append="article-feed"
+                    wire:loading.attr="disabled"
+                    class="w-full sm:w-auto px-6 py-3 rounded-xl font-medium text-sm text-white bg-primary-600 hover:bg-primary-500 active:bg-primary-700 transition shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="loadMore">Load More Articles</span>
+                    <span wire:loading wire:target="loadMore" class="flex items-center gap-2">
+                        <svg class="w-4 h-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                        <span>Loading...</span>
+                    </span>
+                </button>
+            </div>
+        @endif
+    @endisland
+</div>
+```
+
+##### Pattern B: Infinite Scroll (`wire:intersect`)
+```html
+<div class="p-4 md:p-6 space-y-6 max-w-4xl mx-auto">
+    {{-- Feed List Island (Appends new items on loadMore) --}}
+    <div class="flex flex-col gap-3">
+        @island(name: 'article-feed')
+            @foreach ($this->articles as $article)
+                <article
+                    wire:key="article-{{ $article->id }}"
+                    class="p-4 bg-white dark:bg-secondary-900 rounded-2xl border border-secondary-100 dark:border-secondary-800 shadow-sm transition hover:shadow-md md:p-6"
+                >
+                    <h3 class="text-lg font-semibold text-secondary-900 dark:text-white">
+                        {{ $article->title }}
+                    </h3>
+                    <p class="mt-2 text-sm text-secondary-600 dark:text-secondary-400">
+                        {{ $article->excerpt }}
+                    </p>
+                </article>
+            @endforeach
+        @endisland
+    </div>
+
+    {{-- Infinite Scroll Sentinel Island (Auto-triggers loadMore when in viewport) --}}
+    @island(name: 'article-controls')
+        @if ($this->hasMorePages)
+            <div
+                wire:intersect="loadMore"
+                wire:island.append="article-feed"
+                class="flex items-center justify-center py-6"
+            >
+                <div class="flex items-center gap-2 text-sm text-secondary-500 dark:text-secondary-400 animate-pulse">
+                    <svg class="w-5 h-5 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Loading more items...</span>
+                </div>
+            </div>
+        @endif
+    @endisland
+</div>
+```
+
+---
+
+## 4. Routes — Use `Route::livewire()` for Livewire Pages
 
 Livewire page components are registered as **the default routing behavior** using Livewire 4's `Route::livewire()` helper, not the generic `Route::get(...)->livewire(...)` or view-based patterns. Only touch Livewire's own configuration (component/view discovery paths, layout paths, etc.) if a task genuinely requires it — otherwise leave the default config alone.
 
@@ -136,7 +306,7 @@ Route::middleware(['auth'])->group(function () {
 
 ---
 
-## 4. Tailwind CSS & Styling Rules — Mobile-First, Utility-First
+## 5. Tailwind CSS & Styling Rules — Mobile-First, Utility-First
 
 We adhere to a strict **utility-first CSS** approach, and layouts are always designed **mobile-first**.
 
@@ -165,7 +335,7 @@ Tailwind is mobile-first by design — unprefixed utilities apply to the smalles
 
 ---
 
-## 5. AlpineJS — Simple UI Interactivity Only
+## 6. AlpineJS — Simple UI Interactivity Only
 
 AlpineJS is for **small, self-contained UI state** — not general app logic. Keep it to things like toggling visibility, switching tabs, and open/close state.
 
@@ -182,7 +352,7 @@ AlpineJS is for **small, self-contained UI state** — not general app logic. Ke
 
 ---
 
-## 6. Package Policy — Ask First, Prefer Native Laravel/Livewire
+## 7. Package Policy — Ask First, Prefer Native Laravel/Livewire
 
 Minimize third-party packages. Default to solving problems with plain Laravel/Livewire/Blade code rather than pulling in a package.
 
@@ -192,7 +362,7 @@ Minimize third-party packages. Default to solving problems with plain Laravel/Li
 
 ---
 
-## 7. Example Component
+## 8. Example Component
 Here is the blueprint of a compliant Livewire 4 Multi-File Component:
 
 ### `index.php` (Class File)
@@ -274,6 +444,7 @@ class StatsCard extends Component
 - [ ] Component created with `--mfc` (not the SFC default)
 - [ ] Placed under `pages/` (full pages) or `component/` (reusable), grouped by module, with `index.php`/`index.blade.php` co-located
 - [ ] Page routes use `Route::livewire($uri, Component::class)->name(...)`, not `Route::get()`
+- [ ] Infinite scroll or "load more" requests use Livewire 4 `@island(name: '...')` with `wire:island.append`, fetching only single-page slices (`forPage`) to avoid duplication
 - [ ] No PHP logic or `<script>` tags inline in `index.blade.php`
 - [ ] Styling is Tailwind utility classes; no manual CSS unless unavoidable
 - [ ] Layout written mobile-first (base = mobile, `md:`/`lg:` layered on for desktop, not the reverse)
